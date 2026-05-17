@@ -1,8 +1,6 @@
 package com.flowguard.presentation.controller;
 
-import com.flowguard.application.dto.CreateFeatureFlagCommand;
-import com.flowguard.application.dto.FeatureFlagDto;
-import com.flowguard.application.dto.UpdateFeatureFlagCommand;
+import com.flowguard.application.dto.*;
 import com.flowguard.application.service.FeatureFlagService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -11,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/flags")
@@ -59,5 +58,35 @@ public class FeatureFlagController {
         String performedBy = principal != null ? principal.getName() : "anonymous";
         FeatureFlagDto response = featureFlagService.toggleFeatureFlag(key, performedBy);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/{key}/evaluate")
+    public ResponseEntity<EvaluateResponse> evaluateFeatureFlag(
+            @PathVariable String key,
+            @Valid @RequestBody EvaluateRequest request) {
+        EvaluateResponse response = featureFlagService.evaluateFlag(key, request);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/{key}/rules")
+    public ResponseEntity<FlagRuleDto> addRule(
+            @PathVariable String key,
+            @Valid @RequestBody CreateFlagRuleCommand command) {
+        FlagRuleDto response = featureFlagService.addRule(key, command);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @GetMapping("/{key}/rules")
+    public ResponseEntity<List<FlagRuleDto>> listRules(@PathVariable String key) {
+        List<FlagRuleDto> response = featureFlagService.listRules(key);
+        return ResponseEntity.ok(response);
+    }
+
+    @DeleteMapping("/{key}/rules/{ruleId}")
+    public ResponseEntity<Void> deleteRule(
+            @PathVariable String key,
+            @PathVariable UUID ruleId) {
+        featureFlagService.deleteRule(key, ruleId);
+        return ResponseEntity.noContent().build();
     }
 }

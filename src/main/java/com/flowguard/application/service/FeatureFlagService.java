@@ -1,16 +1,16 @@
 package com.flowguard.application.service;
 
-import com.flowguard.application.dto.CreateFeatureFlagCommand;
-import com.flowguard.application.dto.FeatureFlagDto;
-import com.flowguard.application.dto.FlagChangeEvent;
-import com.flowguard.application.dto.UpdateFeatureFlagCommand;
+import com.flowguard.application.dto.*;
 import com.flowguard.domain.exception.ConflictException;
 import com.flowguard.domain.exception.ResourceNotFoundException;
 import com.flowguard.domain.model.AuditLog;
 import com.flowguard.domain.model.FeatureFlag;
+import com.flowguard.domain.model.FlagRule;
 import com.flowguard.domain.model.TenantContext;
 import com.flowguard.domain.repository.AuditLogRepository;
 import com.flowguard.domain.repository.FeatureFlagRepository;
+import com.flowguard.domain.service.RuleEvaluator;
+import com.flowguard.domain.util.RolloutEvaluator;
 import com.flowguard.infrastructure.messaging.FlagChangePublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,15 +27,18 @@ public class FeatureFlagService {
     private final AuditLogRepository auditLogRepository;
     private final FlagCacheService flagCacheService;
     private final FlagChangePublisher flagChangePublisher;
+    private final RuleEvaluator ruleEvaluator;
 
     public FeatureFlagService(FeatureFlagRepository featureFlagRepository,
                               AuditLogRepository auditLogRepository,
                               FlagCacheService flagCacheService,
-                              FlagChangePublisher flagChangePublisher) {
+                              FlagChangePublisher flagChangePublisher,
+                              RuleEvaluator ruleEvaluator) {
         this.featureFlagRepository = featureFlagRepository;
         this.auditLogRepository = auditLogRepository;
         this.flagCacheService = flagCacheService;
         this.flagChangePublisher = flagChangePublisher;
+        this.ruleEvaluator = ruleEvaluator;
     }
 
     private UUID getRequiredTenantId() {
@@ -185,5 +188,105 @@ public class FeatureFlagService {
         ));
 
         return dto;
+    }
+
+    @Transactional
+    public FlagRuleDto addRule(String key, CreateFlagRuleCommand command) {
+        UUID tenantId = getRequiredTenantId();
+        FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
+                .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
+
+        FlagRule rule = FlagRule.builder()
+                .attributeKey(command.attributeKey())
+                .operator(command.operator())
+                .attributeValue(command.attributeValue())
+                .build();
+
+        flag.getRules().add(rule);
+        flag = featureFlagRepository.save(flag);
+
+        // Find saved rule to get persistent ID
+        FlagRule savedRule = flag.getRules().stream()
+                .filter(r -> r.getAttributeKey().equals(command.attributeKey()) &&
+                             r.getOperator() == command.operator() &&
+                             r.getAttributeValue().equals(command.attributeValue()))
+                .findFirst()
+                .orElse(rule);
+
+        FlagRuleDto ruleDto = FlagRuleDto.fromEntity(savedRule);
+
+        // Invalidate cache
+        flagCacheService.evictFlag(tenantId, key);
+
+        // Publish SSE event with full updated payload
+        FeatureFlagDto fullFlagDto = FeatureFlagDto.fromEntity(flag);
+        flagChangePublisher.publish(new FlagChangeEvent(
+                key,
+                tenantId,
+                "UPDATED",
+                Instant.now().toString(),
+                fullFlagDto
+        ));
+
+        return ruleDto;
+    }
+
+    @Transactional(readOnly = true)
+    public List<FlagRuleDto> listRules(String key) {
+        UUID tenantId = getRequiredTenantId();
+        FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
+                .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
+
+        return flag.getRules().stream()
+                .map(FlagRuleDto::fromEntity)
+                .toList();
+    }
+
+    @Transactional
+    public void deleteRule(String key, UUID ruleId) {
+        UUID tenantId = getRequiredTenantId();
+        FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
+                .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
+
+        boolean removed = flag.getRules().removeIf(r -> r.getId().equals(ruleId));
+        if (!removed) {
+            throw new ResourceNotFoundException("Flag rule with ID '" + ruleId + "' not found on flag '" + key + "'");
+        }
+
+        flag = featureFlagRepository.save(flag);
+
+        // Invalidate cache
+        flagCacheService.evictFlag(tenantId, key);
+
+        // Publish SSE event with full updated payload
+        FeatureFlagDto fullFlagDto = FeatureFlagDto.fromEntity(flag);
+        flagChangePublisher.publish(new FlagChangeEvent(
+                key,
+                tenantId,
+                "UPDATED",
+                Instant.now().toString(),
+                fullFlagDto
+        ));
+    }
+
+    @Transactional(readOnly = true)
+    public EvaluateResponse evaluateFlag(String key, EvaluateRequest request) {
+        UUID tenantId = getRequiredTenantId();
+        FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
+                .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
+
+        // 1. Strict Enabled Check
+        if (!flag.isEnabled()) {
+            return new EvaluateResponse(false, "DISABLED");
+        }
+
+        // 2. Strict Rules check
+        if (!ruleEvaluator.evaluate(flag.getRules(), request.attributes())) {
+            return new EvaluateResponse(false, "RULE_MISMATCH");
+        }
+
+        // 3. Strict Rollout check
+        boolean inRollout = RolloutEvaluator.isUserInRollout(flag.getKey(), request.userId(), flag.getRolloutPercentage());
+        return new EvaluateResponse(inRollout, "ROLLOUT");
     }
 }
