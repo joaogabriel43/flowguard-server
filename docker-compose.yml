@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: flowguard-db
+    environment:
+      POSTGRES_DB: flowguard
+      POSTGRES_USER: flowguard_user
+      POSTGRES_PASSWORD: flowguard_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
