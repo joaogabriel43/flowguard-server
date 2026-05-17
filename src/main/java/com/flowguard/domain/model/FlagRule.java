@@ -33,4 +33,8 @@ public class FlagRule {
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "flag_id", nullable = false)
+    private FeatureFlag flag;
 }

@@ -48,8 +48,7 @@ public class FeatureFlag {
     @UpdateTimestamp
     private OffsetDateTime updatedAt;
 
-    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
-    @JoinColumn(name = "flag_id")
+    @OneToMany(mappedBy = "flag", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
     @Builder.Default
     private List<FlagRule> rules = new ArrayList<>();
 

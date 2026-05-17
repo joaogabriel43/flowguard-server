@@ -200,6 +200,7 @@ public class FeatureFlagService {
                 .attributeKey(command.attributeKey())
                 .operator(command.operator())
                 .attributeValue(command.attributeValue())
+                .flag(flag)
                 .build();
 
         flag.getRules().add(rule);
