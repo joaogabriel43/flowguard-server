@@ -8,6 +8,7 @@ import com.flowguard.domain.model.FeatureFlag;
 import com.flowguard.domain.model.TenantContext;
 import com.flowguard.domain.repository.AuditLogRepository;
 import com.flowguard.domain.repository.FeatureFlagRepository;
+import com.flowguard.infrastructure.messaging.FlagChangePublisher;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,12 @@ class FeatureFlagServiceTest {
 
     @Mock
     private AuditLogRepository auditLogRepository;
+
+    @Mock
+    private FlagCacheService flagCacheService;
+
+    @Mock
+    private FlagChangePublisher flagChangePublisher;
 
     @InjectMocks
     private FeatureFlagService featureFlagService;
