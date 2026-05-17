@@ -3,6 +3,7 @@ package com.flowguard.application.dto;
 import com.flowguard.domain.model.FeatureFlag;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 public record FeatureFlagDto(
@@ -13,6 +14,7 @@ public record FeatureFlagDto(
     String description,
     boolean enabled,
     int rolloutPercentage,
+    List<FlagRuleDto> rules,
     OffsetDateTime createdAt,
     OffsetDateTime updatedAt
 ) {
@@ -25,6 +27,9 @@ public record FeatureFlagDto(
             flag.getDescription(),
             flag.isEnabled(),
             flag.getRolloutPercentage(),
+            flag.getRules() != null 
+                ? flag.getRules().stream().map(FlagRuleDto::fromEntity).toList() 
+                : List.of(),
             flag.getCreatedAt(),
             flag.getUpdatedAt()
         );
