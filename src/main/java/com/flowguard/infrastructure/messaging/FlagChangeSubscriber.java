@@ -51,7 +51,8 @@ public class FlagChangeSubscriber implements MessageListener {
                     break;
             }
 
-            sseEmitterRegistry.broadcast(event.tenantId(), sseEventName, event);
+            Object sseData = event.featureFlag() != null ? event.featureFlag() : event;
+            sseEmitterRegistry.broadcast(event.tenantId(), sseEventName, sseData);
             
         } catch (Exception e) {
             logger.error("Failed to parse and broadcast feature flag change event", e);
