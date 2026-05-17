@@ -2,6 +2,7 @@ package com.flowguard.application.service;
 
 import com.flowguard.application.dto.CreateFeatureFlagCommand;
 import com.flowguard.application.dto.FeatureFlagDto;
+import com.flowguard.application.dto.FlagChangeEvent;
 import com.flowguard.application.dto.UpdateFeatureFlagCommand;
 import com.flowguard.domain.exception.ConflictException;
 import com.flowguard.domain.exception.ResourceNotFoundException;
@@ -10,9 +11,11 @@ import com.flowguard.domain.model.FeatureFlag;
 import com.flowguard.domain.model.TenantContext;
 import com.flowguard.domain.repository.AuditLogRepository;
 import com.flowguard.domain.repository.FeatureFlagRepository;
+import com.flowguard.infrastructure.messaging.FlagChangePublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -22,11 +25,17 @@ public class FeatureFlagService {
 
     private final FeatureFlagRepository featureFlagRepository;
     private final AuditLogRepository auditLogRepository;
+    private final FlagCacheService flagCacheService;
+    private final FlagChangePublisher flagChangePublisher;
 
     public FeatureFlagService(FeatureFlagRepository featureFlagRepository,
-                              AuditLogRepository auditLogRepository) {
+                              AuditLogRepository auditLogRepository,
+                              FlagCacheService flagCacheService,
+                              FlagChangePublisher flagChangePublisher) {
         this.featureFlagRepository = featureFlagRepository;
         this.auditLogRepository = auditLogRepository;
+        this.flagCacheService = flagCacheService;
+        this.flagChangePublisher = flagChangePublisher;
     }
 
     private UUID getRequiredTenantId() {
@@ -55,7 +64,20 @@ public class FeatureFlagService {
                 .build();
 
         flag = featureFlagRepository.save(flag);
-        return FeatureFlagDto.fromEntity(flag);
+        FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
+
+        // Evict from cache
+        flagCacheService.evictFlag(tenantId, command.key());
+
+        // Publish event
+        flagChangePublisher.publish(new FlagChangeEvent(
+                dto.key(),
+                tenantId,
+                "CREATED",
+                Instant.now().toString()
+        ));
+
+        return dto;
     }
 
     @Transactional(readOnly = true)
@@ -70,9 +92,17 @@ public class FeatureFlagService {
     @Transactional(readOnly = true)
     public FeatureFlagDto getFeatureFlagByKey(String key) {
         UUID tenantId = getRequiredTenantId();
-        FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
-                .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
-        return FeatureFlagDto.fromEntity(flag);
+
+        // Cache-aside pattern
+        return flagCacheService.getFlag(tenantId, key)
+                .orElseGet(() -> {
+                    FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
+                            .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
+                    FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
+                    // Update cache on the way back
+                    flagCacheService.putFlag(tenantId, key, dto);
+                    return dto;
+                });
     }
 
     @Transactional
@@ -87,7 +117,20 @@ public class FeatureFlagService {
         flag.setRolloutPercentage(command.rolloutPercentage());
 
         flag = featureFlagRepository.save(flag);
-        return FeatureFlagDto.fromEntity(flag);
+        FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
+
+        // Evict from cache
+        flagCacheService.evictFlag(tenantId, key);
+
+        // Publish event
+        flagChangePublisher.publish(new FlagChangeEvent(
+                dto.key(),
+                tenantId,
+                "UPDATED",
+                Instant.now().toString()
+        ));
+
+        return dto;
     }
 
     @Transactional
@@ -95,7 +138,19 @@ public class FeatureFlagService {
         UUID tenantId = getRequiredTenantId();
         FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
                 .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
+        
         featureFlagRepository.delete(flag);
+
+        // Evict from cache
+        flagCacheService.evictFlag(tenantId, key);
+
+        // Publish event
+        flagChangePublisher.publish(new FlagChangeEvent(
+                key,
+                tenantId,
+                "DELETED",
+                Instant.now().toString()
+        ));
     }
 
     @Transactional
@@ -107,6 +162,7 @@ public class FeatureFlagService {
         boolean oldStatus = flag.isEnabled();
         flag.setEnabled(!oldStatus);
         flag = featureFlagRepository.save(flag);
+        FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
 
         // Audit log mandatory on activation/deactivation
         AuditLog auditLog = AuditLog.builder()
@@ -117,6 +173,17 @@ public class FeatureFlagService {
                 .build();
         auditLogRepository.save(auditLog);
 
-        return FeatureFlagDto.fromEntity(flag);
+        // Evict from cache
+        flagCacheService.evictFlag(tenantId, key);
+
+        // Publish event
+        flagChangePublisher.publish(new FlagChangeEvent(
+                key,
+                tenantId,
+                "TOGGLED",
+                Instant.now().toString()
+        ));
+
+        return dto;
     }
 }
