@@ -1,0 +1,8 @@
+CREATE TABLE audit_logs (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    flag_id UUID NOT NULL REFERENCES feature_flags(id) ON DELETE CASCADE,
+    action VARCHAR(50) NOT NULL,
+    performed_by VARCHAR(255) NOT NULL,
+    performed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
