@@ -1,5 +1,0 @@
-com\flowguard\presentation\controller\AuthIntegrationTest.class
-com\flowguard\application\service\FeatureFlagServiceTest.class
-com\flowguard\presentation\controller\FeatureFlagIntegrationTest.class
-com\flowguard\BaseIntegrationTest.class
-com\flowguard\domain\util\RolloutEvaluatorPropertyTest.class
