@@ -1,0 +1,13 @@
+.git
+.gitignore
+.dockerignore
+.vscode
+.mvn
+target
+node_modules
+frontend/node_modules
+frontend/dist
+frontend/.angular
+Dockerfile
+railway.toml
+README.md
