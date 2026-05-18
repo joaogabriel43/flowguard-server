@@ -40,3 +40,8 @@ management:
 jwt:
   secret: ${JWT_SECRET:8f830a3b2b800ea011b025f82c2a0d1e57c5a08db1b92040b10626a7e0a8163f}
   expiration-ms: 86400000 # 24 hours
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
+
