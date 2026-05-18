@@ -12,6 +12,8 @@ import com.flowguard.domain.repository.FeatureFlagRepository;
 import com.flowguard.domain.service.RuleEvaluator;
 import com.flowguard.domain.util.RolloutEvaluator;
 import com.flowguard.infrastructure.messaging.FlagChangePublisher;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,6 +51,15 @@ public class FeatureFlagService {
         return tenantId;
     }
 
+    private String getCurrentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return (auth != null && auth.isAuthenticated()) ? auth.getName() : "system";
+    }
+
+    private static String flagState(FeatureFlag flag) {
+        return "enabled=" + flag.isEnabled() + ",rollout=" + flag.getRolloutPercentage();
+    }
+
     @Transactional
     public FeatureFlagDto createFeatureFlag(CreateFeatureFlagCommand command) {
         UUID tenantId = getRequiredTenantId();
@@ -69,15 +80,19 @@ public class FeatureFlagService {
         flag = featureFlagRepository.save(flag);
         FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
 
-        // Evict from cache
-        flagCacheService.evictFlag(tenantId, command.key());
+        // A-3: audit log for flag creation
+        auditLogRepository.save(AuditLog.builder()
+                .tenantId(tenantId)
+                .flagId(flag.getId())
+                .action("CREATED")
+                .performedBy(getCurrentUser())
+                .previousState(null)
+                .newState(flagState(flag))
+                .build());
 
-        // Publish event
+        flagCacheService.evictFlag(tenantId, command.key());
         flagChangePublisher.publish(new FlagChangeEvent(
-                dto.key(),
-                tenantId,
-                "CREATED",
-                Instant.now().toString()
+                dto.key(), tenantId, "CREATED", Instant.now().toString()
         ));
 
         return dto;
@@ -96,13 +111,11 @@ public class FeatureFlagService {
     public FeatureFlagDto getFeatureFlagByKey(String key) {
         UUID tenantId = getRequiredTenantId();
 
-        // Cache-aside pattern
         return flagCacheService.getFlag(tenantId, key)
                 .orElseGet(() -> {
                     FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
                             .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
                     FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
-                    // Update cache on the way back
                     flagCacheService.putFlag(tenantId, key, dto);
                     return dto;
                 });
@@ -114,6 +127,9 @@ public class FeatureFlagService {
         FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
                 .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
 
+        // A-3: capture state before mutation for audit trail
+        String previousState = flagState(flag);
+
         flag.setName(command.name());
         flag.setDescription(command.description());
         flag.setEnabled(command.enabled());
@@ -122,15 +138,18 @@ public class FeatureFlagService {
         flag = featureFlagRepository.save(flag);
         FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
 
-        // Evict from cache
-        flagCacheService.evictFlag(tenantId, key);
+        auditLogRepository.save(AuditLog.builder()
+                .tenantId(tenantId)
+                .flagId(flag.getId())
+                .action("UPDATED")
+                .performedBy(getCurrentUser())
+                .previousState(previousState)
+                .newState(flagState(flag))
+                .build());
 
-        // Publish event
+        flagCacheService.evictFlag(tenantId, key);
         flagChangePublisher.publish(new FlagChangeEvent(
-                dto.key(),
-                tenantId,
-                "UPDATED",
-                Instant.now().toString()
+                dto.key(), tenantId, "UPDATED", Instant.now().toString()
         ));
 
         return dto;
@@ -141,18 +160,26 @@ public class FeatureFlagService {
         UUID tenantId = getRequiredTenantId();
         FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
                 .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
-        
+
+        // A-3: capture state before deletion; audit log saved first so it survives flag deletion.
+        //      FK is ON DELETE SET NULL (V6 migration) so this entry is preserved after flag is removed.
+        String previousState = flagState(flag);
+        UUID flagId = flag.getId();
+
+        auditLogRepository.save(AuditLog.builder()
+                .tenantId(tenantId)
+                .flagId(flagId)
+                .action("DELETED")
+                .performedBy(getCurrentUser())
+                .previousState(previousState)
+                .newState(null)
+                .build());
+
         featureFlagRepository.delete(flag);
 
-        // Evict from cache
         flagCacheService.evictFlag(tenantId, key);
-
-        // Publish event
         flagChangePublisher.publish(new FlagChangeEvent(
-                key,
-                tenantId,
-                "DELETED",
-                Instant.now().toString()
+                key, tenantId, "DELETED", Instant.now().toString()
         ));
     }
 
@@ -167,24 +194,16 @@ public class FeatureFlagService {
         flag = featureFlagRepository.save(flag);
         FeatureFlagDto dto = FeatureFlagDto.fromEntity(flag);
 
-        // Audit log mandatory on activation/deactivation
-        AuditLog auditLog = AuditLog.builder()
+        auditLogRepository.save(AuditLog.builder()
                 .tenantId(tenantId)
                 .flagId(flag.getId())
                 .action(flag.isEnabled() ? "ACTIVATED" : "DEACTIVATED")
                 .performedBy(performedBy)
-                .build();
-        auditLogRepository.save(auditLog);
+                .build());
 
-        // Evict from cache
         flagCacheService.evictFlag(tenantId, key);
-
-        // Publish event
         flagChangePublisher.publish(new FlagChangeEvent(
-                key,
-                tenantId,
-                "TOGGLED",
-                Instant.now().toString()
+                key, tenantId, "TOGGLED", Instant.now().toString()
         ));
 
         return dto;
@@ -196,7 +215,11 @@ public class FeatureFlagService {
         FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
                 .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
 
+        // A-3: count before adding
+        String previousState = "rules=" + flag.getRules().size();
+
         FlagRule rule = FlagRule.builder()
+                .tenantId(tenantId)
                 .attributeKey(command.attributeKey())
                 .operator(command.operator())
                 .attributeValue(command.attributeValue())
@@ -206,7 +229,6 @@ public class FeatureFlagService {
         flag.getRules().add(rule);
         flag = featureFlagRepository.save(flag);
 
-        // Find saved rule to get persistent ID
         FlagRule savedRule = flag.getRules().stream()
                 .filter(r -> r.getAttributeKey().equals(command.attributeKey()) &&
                              r.getOperator() == command.operator() &&
@@ -216,17 +238,20 @@ public class FeatureFlagService {
 
         FlagRuleDto ruleDto = FlagRuleDto.fromEntity(savedRule);
 
-        // Invalidate cache
+        auditLogRepository.save(AuditLog.builder()
+                .tenantId(tenantId)
+                .flagId(flag.getId())
+                .action("RULE_ADDED")
+                .performedBy(getCurrentUser())
+                .previousState(previousState)
+                .newState("rules=" + flag.getRules().size())
+                .build());
+
         flagCacheService.evictFlag(tenantId, key);
 
-        // Publish SSE event with full updated payload
         FeatureFlagDto fullFlagDto = FeatureFlagDto.fromEntity(flag);
         flagChangePublisher.publish(new FlagChangeEvent(
-                key,
-                tenantId,
-                "UPDATED",
-                Instant.now().toString(),
-                fullFlagDto
+                key, tenantId, "UPDATED", Instant.now().toString(), fullFlagDto
         ));
 
         return ruleDto;
@@ -249,6 +274,9 @@ public class FeatureFlagService {
         FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
                 .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
 
+        // A-3: count before removal
+        String previousState = "rules=" + flag.getRules().size();
+
         boolean removed = flag.getRules().removeIf(r -> r.getId().equals(ruleId));
         if (!removed) {
             throw new ResourceNotFoundException("Flag rule with ID '" + ruleId + "' not found on flag '" + key + "'");
@@ -256,17 +284,20 @@ public class FeatureFlagService {
 
         flag = featureFlagRepository.save(flag);
 
-        // Invalidate cache
+        auditLogRepository.save(AuditLog.builder()
+                .tenantId(tenantId)
+                .flagId(flag.getId())
+                .action("RULE_DELETED")
+                .performedBy(getCurrentUser())
+                .previousState(previousState)
+                .newState("rules=" + flag.getRules().size())
+                .build());
+
         flagCacheService.evictFlag(tenantId, key);
 
-        // Publish SSE event with full updated payload
         FeatureFlagDto fullFlagDto = FeatureFlagDto.fromEntity(flag);
         flagChangePublisher.publish(new FlagChangeEvent(
-                key,
-                tenantId,
-                "UPDATED",
-                Instant.now().toString(),
-                fullFlagDto
+                key, tenantId, "UPDATED", Instant.now().toString(), fullFlagDto
         ));
     }
 
@@ -276,17 +307,14 @@ public class FeatureFlagService {
         FeatureFlag flag = featureFlagRepository.findByTenantIdAndKey(tenantId, key)
                 .orElseThrow(() -> new ResourceNotFoundException("Feature flag with key '" + key + "' not found"));
 
-        // 1. Strict Enabled Check
         if (!flag.isEnabled()) {
             return new EvaluateResponse(false, "DISABLED");
         }
 
-        // 2. Strict Rules check
         if (!ruleEvaluator.evaluate(flag.getRules(), request.attributes())) {
             return new EvaluateResponse(false, "RULE_MISMATCH");
         }
 
-        // 3. Strict Rollout check
         boolean inRollout = RolloutEvaluator.isUserInRollout(flag.getKey(), request.userId(), flag.getRolloutPercentage());
         return new EvaluateResponse(inRollout, "ROLLOUT");
     }

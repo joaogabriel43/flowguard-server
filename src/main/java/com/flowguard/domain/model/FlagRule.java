@@ -20,6 +20,10 @@ public class FlagRule {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    // M-6: tenant_id for direct tenant isolation without requiring a flag join
+    @Column(name = "tenant_id", nullable = false)
+    private UUID tenantId;
+
     @Column(name = "attribute_key", nullable = false)
     private String attributeKey;
 
