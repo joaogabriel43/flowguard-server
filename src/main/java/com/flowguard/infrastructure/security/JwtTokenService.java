@@ -2,8 +2,14 @@ package com.flowguard.infrastructure.security;
 
 import com.flowguard.application.service.TokenService;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.MalformedJwtException;
+import io.jsonwebtoken.UnsupportedJwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import io.jsonwebtoken.security.SignatureException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +20,8 @@ import java.util.Map;
 
 @Service
 public class JwtTokenService implements TokenService {
+
+    private static final Logger logger = LoggerFactory.getLogger(JwtTokenService.class);
 
     private final SecretKey key;
     private final long expirationMs;
@@ -46,9 +54,19 @@ public class JwtTokenService implements TokenService {
                 .build()
                 .parseSignedClaims(token);
             return true;
-        } catch (Exception e) {
-            return false;
+        } catch (ExpiredJwtException e) {
+            // A-4: warn per failure type — no token value or stack trace exposed
+            logger.warn("JWT token is expired");
+        } catch (UnsupportedJwtException e) {
+            logger.warn("JWT token algorithm or format is unsupported");
+        } catch (MalformedJwtException e) {
+            logger.warn("JWT token is malformed");
+        } catch (SignatureException e) {
+            logger.warn("JWT signature validation failed");
+        } catch (IllegalArgumentException e) {
+            logger.warn("JWT token is null or empty");
         }
+        return false;
     }
 
     @Override

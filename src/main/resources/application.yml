@@ -1,17 +1,17 @@
 spring:
   application:
     name: flowguard-server
-  
+
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-  
+
   datasource:
-    # URL configurada com p6spy
-    url: jdbc:p6spy:postgresql://localhost:5432/flowguard
-    username: flowguard_user
-    password: flowguard_password
+    # C-2: credentials via env vars only — no hardcoded fallback
+    url: jdbc:p6spy:postgresql://${DATABASE_HOST:localhost}:${DATABASE_PORT:5432}/${DATABASE_NAME:flowguard}
+    username: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
     driver-class-name: com.p6spy.engine.spy.P6SpyDriver
 
   jpa:
@@ -24,9 +24,10 @@ spring:
 
   flyway:
     enabled: true
-    url: jdbc:postgresql://localhost:5432/flowguard # Flyway bypasses p6spy
-    user: flowguard_user
-    password: flowguard_password
+    # Flyway bypasses p6spy — direct JDBC URL
+    url: jdbc:postgresql://${DATABASE_HOST:localhost}:${DATABASE_PORT:5432}/${DATABASE_NAME:flowguard}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
 
 management:
   endpoints:
@@ -35,13 +36,15 @@ management:
         include: health,info
   endpoint:
     health:
-      show-details: always
+      # A-2: show-details only for authenticated users
+      show-details: when-authorized
 
+# C-1: no fallback — startup fails if JWT_SECRET is not set
 jwt:
-  secret: ${JWT_SECRET:8f830a3b2b800ea011b025f82c2a0d1e57c5a08db1b92040b10626a7e0a8163f}
+  secret: ${JWT_SECRET}
   expiration-ms: 86400000 # 24 hours
 
 app:
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
-
+    # C-3: safe local dev default; override via CORS_ALLOWED_ORIGINS in production
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}

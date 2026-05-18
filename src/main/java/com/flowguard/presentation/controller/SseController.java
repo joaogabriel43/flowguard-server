@@ -7,6 +7,7 @@ import com.flowguard.infrastructure.sse.SseEmitterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -39,8 +40,7 @@ public class SseController {
 
         // 30 minutes timeout: 30 * 60 * 1000 = 1,800,000 ms
         SseEmitter emitter = new SseEmitter(1800000L);
-        
-        // Register the emitter in the registry
+
         sseEmitterRegistry.register(tenantId, emitter);
 
         // Dispatch initial snapshot immediately
@@ -56,5 +56,11 @@ public class SseController {
         }
 
         return emitter;
+    }
+
+    // B-1: heartbeat every 30 s keeps the TCP connection alive through proxies and load balancers
+    @Scheduled(fixedRate = 30_000)
+    public void sendHeartbeat() {
+        sseEmitterRegistry.broadcastHeartbeat();
     }
 }

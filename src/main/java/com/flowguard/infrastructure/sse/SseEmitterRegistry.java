@@ -74,4 +74,24 @@ public class SseEmitterRegistry {
     public int getTotalCount() {
         return registry.values().stream().mapToInt(List::size).sum();
     }
+
+    // B-1: send a heartbeat event to every connected emitter across all tenants
+    public void broadcastHeartbeat() {
+        registry.forEach((tenantId, emitters) -> {
+            if (emitters == null || emitters.isEmpty()) {
+                return;
+            }
+            List<SseEmitter> deadEmitters = new CopyOnWriteArrayList<>();
+            for (SseEmitter emitter : emitters) {
+                try {
+                    emitter.send(SseEmitter.event().name("heartbeat").data(""));
+                } catch (IOException | IllegalStateException e) {
+                    deadEmitters.add(emitter);
+                }
+            }
+            for (SseEmitter dead : deadEmitters) {
+                remove(tenantId, dead);
+            }
+        });
+    }
 }
